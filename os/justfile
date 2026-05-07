@@ -1,0 +1,36 @@
+set dotenv-load := true
+
+fix-uart:
+    @echo 'Configuring UART on Pi (requires sudo)...'
+    @echo ''
+    @echo '1. Disabling serial console in cmdline.txt...'
+    ssh "$PI_USER@$PI_IP" "sudo sed -i 's/console=ttyS0,[0-9]* //g' /boot/firmware/cmdline.txt || sudo sed -i 's/console=ttyS0,[0-9]* //g' /boot/cmdline.txt"
+    ssh "$PI_USER@$PI_IP" "sudo sed -i 's/console=serial0,[0-9]* //g' /boot/firmware/cmdline.txt || sudo sed -i 's/console=serial0,[0-9]* //g' /boot/cmdline.txt"
+    @echo ''
+    @echo '2. Adding dtoverlay=disable-bt to config.txt...'
+    ssh "$PI_USER@$PI_IP" "grep -q 'dtoverlay=disable-bt' /boot/firmware/config.txt 2>/dev/null || grep -q 'dtoverlay=disable-bt' /boot/config.txt 2>/dev/null || (echo 'dtoverlay=disable-bt' | sudo tee -a /boot/firmware/config.txt 2>/dev/null || echo 'dtoverlay=disable-bt' | sudo tee -a /boot/config.txt)"
+    @echo ''
+    @echo '3. Ensuring enable_uart=1 is set...'
+    ssh "$PI_USER@$PI_IP" "grep -q 'enable_uart=1' /boot/firmware/config.txt 2>/dev/null || grep -q 'enable_uart=1' /boot/config.txt 2>/dev/null || (echo 'enable_uart=1' | sudo tee -a /boot/firmware/config.txt 2>/dev/null || echo 'enable_uart=1' | sudo tee -a /boot/config.txt)"
+    @echo ''
+    @echo '4. Disabling Bluetooth service...'
+    ssh "$PI_USER@$PI_IP" "sudo systemctl disable hciuart 2>/dev/null || true"
+    @echo ''
+    @echo '5. Rebooting Pi...'
+    ssh "$PI_USER@$PI_IP" "sudo reboot" || true
+    @echo ''
+    @echo 'Pi is rebooting. Wait ~30 seconds, then run: just run-remote'
+    @echo 'After reboot /dev/serial0 should point to ttyAMA0 (PL011).'
+
+deploy:
+    @echo 'Build and deploy on pi'
+    docker build --progress=plain -t thermo-os . && docker run --rm -v "$(pwd)/build:/output" thermo-os
+    ssh "$PI_USER@$PI_IP" "rm /home/$PI_USER/os || true"
+    scp .env "$PI_USER@$PI_IP:/home/$PI_USER/"
+    scp build/os "$PI_USER@$PI_IP:/home/$PI_USER/os"
+
+run-remote:
+    @echo 'Build, deploy and run on Pi'
+    just deploy
+    scp .env "$PI_USER@$PI_IP:/home/$PI_USER/"
+    ssh "$PI_USER@$PI_IP" 'RUST_LOG=warn,os=trace ./os'

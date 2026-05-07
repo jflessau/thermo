@@ -1,0 +1,24 @@
+# secret
+.env
+
+# macOS
+.DS_Store
+
+# rust
+target
+
+# os
+os/target
+os/build/*
+!os/build/.gitkeep
+
+# server
+server/target
+
+
+# server
+server/target
+server/*.txt
+
+# free CAD
+*.FCBak

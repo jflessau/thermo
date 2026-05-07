@@ -1,0 +1,25 @@
+[package]
+name = "os"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# utilities
+anyhow = "1.0.100"
+dotenv = "0.15.0"
+
+# async runtime
+tokio = { version = "1", features = ["full"] }
+
+# websocket client
+base64 = "0.22"
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+url = "2"
+
+# config and logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# thermal printer
+serialport = "4.5"
