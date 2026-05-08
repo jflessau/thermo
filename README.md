@@ -9,7 +9,7 @@ This repo has two main components:
 - A relay server that receives print jobs
 - A client running on the Pi that reads print jobs from the relay and operates the printer
 
-## Bill of Materials
+## 📝 Bill of Materials
 
 1. Soldering iron and solder
 2. Raspberry Pi Zero 2 W with power supply and microSD card
@@ -18,9 +18,7 @@ This repo has two main components:
 5. 5–9 V, 2 A universal power adapter, 5.5 × 2.1 / 2.5 mm
 6. Panel-mount DC-022B female DC power jack (5.5 × 2.1 mm / 5.5 × 2.5 mm) with JST 2-pin male plug (2-pin pitch) on a 15 cm wire lead
 
-## Assembly
-
-### Wiring
+## 🛠️ Assembly
 
 You cannot power the printer from the Pi's GPIO pins.  
 Instead, use the universal power adapter (5), plug it into the female DC power jack (6), and connect its VCC and GND to the printer's VIN and GND.
@@ -34,7 +32,7 @@ To control the printer, wire the Pi and printer like this:
 
 The printer comes with a 5-pin JST connector (male-to-male), but you only need GND and RX.
 
-## Software
+## 💻 Software
 
 The project has two parts:
 
