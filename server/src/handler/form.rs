@@ -61,6 +61,7 @@ pub async fn submit_handler(
     }
 
     let formatted_text = format_print_job(&payload.text);
+    info!("received print job from form:\n {formatted_text}");
 
     match state.broadcaster.send(formatted_text) {
         Ok(subscriber_count) => {
