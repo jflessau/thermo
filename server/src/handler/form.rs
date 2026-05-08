@@ -4,6 +4,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     Form,
 };
+use chrono::Local;
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -59,7 +60,9 @@ pub async fn submit_handler(
             .into_response();
     }
 
-    match state.broadcaster.send(payload.text) {
+    let formatted_text = format_print_job(&payload.text);
+
+    match state.broadcaster.send(formatted_text) {
         Ok(subscriber_count) => {
             info!(subscriber_count, "queued print message from form");
             Html(render_form(
@@ -82,6 +85,34 @@ pub async fn submit_handler(
                 .into_response()
         }
     }
+}
+
+fn format_print_job(text: &str) -> String {
+    let trimmed = text.trim();
+    let collapsed = collapse_repeated_newlines(trimmed);
+    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+
+    format!("{timestamp}\n{collapsed}\n------------")
+}
+
+fn collapse_repeated_newlines(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut previous_was_newline = false;
+
+    for ch in text.chars() {
+        if ch == '\n' {
+            if previous_was_newline {
+                continue;
+            }
+            previous_was_newline = true;
+        } else {
+            previous_was_newline = false;
+        }
+
+        result.push(ch);
+    }
+
+    result
 }
 
 fn render_form(
