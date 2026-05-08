@@ -138,7 +138,7 @@ pub fn unauthorized_response() -> Response {
         StatusCode::UNAUTHORIZED,
         [(
             header::WWW_AUTHENTICATE,
-            r#"Basic realm=\"thermo\", charset=\"UTF-8\""#,
+            r#"Basic realm="thermo", charset="UTF-8""#,
         )],
         "unauthorized",
     )
