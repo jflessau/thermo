@@ -9,15 +9,18 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use printer::Printer;
 use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    println!("starting thermo printer os");
+
     dotenv::dotenv().ok();
     init_tracing();
+    debug!("env vars loaded");
 
-    info!("starting thermo printer OS");
+    info!("starting thermo printer os");
 
     let printer = Arc::new(Mutex::new(
         Printer::connect().context("failed to connect to printer")?,

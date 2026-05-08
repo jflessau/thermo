@@ -1,40 +1,50 @@
-use std::{env, net::SocketAddr, sync::Arc};
+mod handler;
 
-use anyhow::{Context, Result, bail};
+use std::{env, net::SocketAddr, sync::OnceLock};
+
+use anyhow::{Context, Result};
 use axum::{
-    Json, Router,
-    extract::{
-        State, WebSocketUpgrade,
-        ws::{Message, WebSocket},
-    },
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
+    Router,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::Deserialize;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
+
+static BASIC_AUTH_USER: OnceLock<String> = OnceLock::new();
+static BASIC_AUTH_PASSWORD: OnceLock<String> = OnceLock::new();
 
 #[derive(Clone)]
-struct AppState {
-    broadcaster: broadcast::Sender<String>,
-    basic_auth_user: Arc<String>,
-    basic_auth_password: Arc<String>,
-}
-
-#[derive(Deserialize)]
-struct PrintRequest {
-    text: String,
+pub struct AppState {
+    pub broadcaster: broadcast::Sender<String>,
+    pub basic_auth_user: String,
+    pub basic_auth_password: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv::dotenv().ok();
-    init_tracing();
 
-    let basic_auth_user = Arc::new(required_env("BASIC_AUTH_USER")?);
-    let basic_auth_password = Arc::new(required_env("BASIC_AUTH_PASSWORD")?);
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,server=debug".into());
+
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_target(false)
+        .init();
+
+    if let Err(err) = serve().await {
+        error!("server exited with error: {err:#}");
+    }
+
+    Ok(())
+}
+
+async fn serve() -> Result<()> {
+    let basic_auth_user = basic_auth_user()?;
+    let basic_auth_password = basic_auth_password()?;
     let bind_addr = env::var("BIND_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
         .parse::<SocketAddr>()
@@ -43,121 +53,54 @@ async fn main() -> Result<()> {
     let (broadcaster, _) = broadcast::channel(256);
 
     let app = Router::new()
-        .route("/print", post(print_handler))
-        .route("/print/ws", get(print_ws_handler))
+        .route(
+            "/form",
+            get(handler::form::handler).post(handler::form::submit_handler),
+        )
+        .route("/print", post(handler::print::handler))
+        .route("/print/ws", get(handler::print_ws::handler))
         .with_state(AppState {
             broadcaster,
-            basic_auth_user: Arc::clone(&basic_auth_user),
-            basic_auth_password: Arc::clone(&basic_auth_password),
+            basic_auth_user,
+            basic_auth_password,
         });
 
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("failed to bind server to {bind_addr}"))?;
 
-    info!(%bind_addr, user = %basic_auth_user, "print relay server listening");
+    info!("print relay server listening on {bind_addr}");
 
-    axum::serve(listener, app)
-        .await
-        .context("server exited unexpectedly")?;
+    if let Err(err) = axum::serve(listener, app).await {
+        error!("server exited with error: {err:#}");
+    }
 
     Ok(())
 }
 
-async fn print_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<PrintRequest>,
-) -> Response {
-    if !is_authorized(
-        &headers,
-        state.basic_auth_user.as_str(),
-        state.basic_auth_password.as_str(),
-    ) {
-        return unauthorized_response();
+fn basic_auth_user() -> Result<String> {
+    if let Some(value) = BASIC_AUTH_USER.get() {
+        return Ok(value.clone());
     }
 
-    match state.broadcaster.send(payload.text) {
-        Ok(subscriber_count) => {
-            info!(subscriber_count, "queued print message");
-            StatusCode::ACCEPTED.into_response()
-        }
-        Err(err) => {
-            warn!(error = %err, "failed to queue print message");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "no printer clients connected",
-            )
-                .into_response()
-        }
-    }
+    let value =
+        env::var("BASIC_AUTH_USER").context("BASIC_AUTH_USER environment variable is required")?;
+    let _ = BASIC_AUTH_USER.set(value.clone());
+    Ok(value)
 }
 
-async fn print_ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if !is_authorized(
-        &headers,
-        state.basic_auth_user.as_str(),
-        state.basic_auth_password.as_str(),
-    ) {
-        return unauthorized_response();
+fn basic_auth_password() -> Result<String> {
+    if let Some(value) = BASIC_AUTH_PASSWORD.get() {
+        return Ok(value.clone());
     }
 
-    ws.on_upgrade(move |socket| handle_ws_connection(socket, state.broadcaster.subscribe()))
+    let value = env::var("BASIC_AUTH_PASSWORD")
+        .context("BASIC_AUTH_PASSWORD environment variable is required")?;
+    let _ = BASIC_AUTH_PASSWORD.set(value.clone());
+    Ok(value)
 }
 
-async fn handle_ws_connection(mut socket: WebSocket, mut rx: broadcast::Receiver<String>) {
-    info!("printer websocket connected");
-
-    loop {
-        tokio::select! {
-            result = rx.recv() => {
-                match result {
-                    Ok(text) => {
-                        if let Err(err) = socket.send(Message::Text(text)).await {
-                            warn!(error = %err, "failed to deliver print message to websocket client");
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        warn!(skipped, "websocket client lagged behind print broadcast");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        warn!("print broadcaster closed");
-                        break;
-                    }
-                }
-            }
-            message = socket.recv() => {
-                match message {
-                    Some(Ok(Message::Close(_))) => break,
-                    Some(Ok(Message::Ping(payload))) => {
-                        if let Err(err) = socket.send(Message::Pong(payload)).await {
-                            warn!(error = %err, "failed to respond to websocket ping");
-                            break;
-                        }
-                    }
-                    Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Text(_))) | Some(Ok(Message::Binary(_))) => {
-                        // ignore messages from printer clients
-                    }
-                    Some(Err(err)) => {
-                        warn!(error = %err, "websocket receive error");
-                        break;
-                    }
-                    None => break,
-                }
-            }
-        }
-    }
-
-    info!("printer websocket disconnected");
-}
-
-fn unauthorized_response() -> Response {
+pub fn unauthorized_response() -> Response {
     (
         StatusCode::UNAUTHORIZED,
         [(
@@ -169,48 +112,42 @@ fn unauthorized_response() -> Response {
         .into_response()
 }
 
-fn is_authorized(headers: &HeaderMap, expected_user: &str, expected_password: &str) -> bool {
+pub fn is_authorized(headers: &HeaderMap, expected_user: &str, expected_password: &str) -> bool {
     let Some(value) = headers.get(header::AUTHORIZATION) else {
+        warn!("missing Authorization header");
         return false;
     };
 
     let Ok(value) = value.to_str() else {
+        warn!("invalid Authorization header value");
         return false;
     };
 
     let Some(encoded) = value.strip_prefix("Basic ") else {
+        warn!("unsupported Authorization scheme");
         return false;
     };
 
     let Ok(decoded) = STANDARD.decode(encoded) else {
+        warn!("invalid base64 in Authorization header");
         return false;
     };
 
     let Ok(decoded) = String::from_utf8(decoded) else {
+        warn!("decoded Authorization header is not valid UTF-8");
         return false;
     };
 
     let Some((user, password)) = decoded.split_once(':') else {
+        warn!("invalid format of decoded Authorization header");
         return false;
     };
 
-    user == expected_user && password == expected_password
-}
+    let r#match = user == expected_user && password == expected_password;
 
-fn required_env(name: &str) -> Result<String> {
-    match env::var(name) {
-        Ok(value) if !value.trim().is_empty() => Ok(value),
-        Ok(_) => bail!("{name} is set but empty"),
-        Err(_) => bail!("{name} is not set"),
+    if !r#match {
+        warn!("invalid credentials in Authorization header: {user}:******");
     }
-}
 
-fn init_tracing() {
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info,server=debug".into());
-
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_target(false)
-        .init();
+    r#match
 }

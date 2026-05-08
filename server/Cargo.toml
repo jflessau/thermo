@@ -1,14 +1,15 @@
 [package]
 name = "server"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-anyhow = "1.0.100"
-axum = { version = "0.7", features = ["ws", "json"] }
+anyhow = "1.0"
+axum = { version = "0.7", features = ["ws"] }
 base64 = "0.22"
-dotenv = "0.15.0"
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
+dotenv = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
