@@ -2,6 +2,9 @@ mod handler;
 
 use std::{env, net::SocketAddr, sync::OnceLock};
 
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
+
 use anyhow::{Context, Result};
 use axum::{
     http::{header, HeaderMap, StatusCode},
@@ -39,6 +42,8 @@ async fn main() -> Result<()> {
         error!("server exited with error: {err:#}");
     }
 
+    info!("exiting");
+
     Ok(())
 }
 
@@ -71,11 +76,39 @@ async fn serve() -> Result<()> {
 
     info!("print relay server listening on {bind_addr}");
 
-    if let Err(err) = axum::serve(listener, app).await {
-        error!("server exited with error: {err:#}");
-    }
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("server exited unexpectedly")?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM signal handler");
+        sigterm.recv().await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("received Ctrl+C, starting graceful shutdown");
+        }
+        _ = terminate => {
+            info!("received SIGTERM, starting graceful shutdown");
+        }
+    }
 }
 
 fn basic_auth_user() -> Result<String> {

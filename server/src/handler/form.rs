@@ -16,6 +16,12 @@ pub struct FormRequest {
     text: String,
 }
 
+#[derive(Clone, Copy)]
+enum MessageKind {
+    Success,
+    Error,
+}
+
 pub async fn handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if !is_authorized(
         &headers,
@@ -25,7 +31,7 @@ pub async fn handler(State(state): State<AppState>, headers: HeaderMap) -> Respo
         return unauthorized_response();
     }
 
-    Html(render_form(None)).into_response()
+    Html(render_form(None, None, false)).into_response()
 }
 
 pub async fn submit_handler(
@@ -44,9 +50,11 @@ pub async fn submit_handler(
     if payload.text.chars().count() > MAX_FORM_CHARS {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
-            Html(render_form(Some(
-                "print job exceeds maximum length of 244 characters",
-            ))),
+            Html(render_form(
+                Some("print job exceeds maximum length of 244 characters"),
+                Some(MessageKind::Error),
+                false,
+            )),
         )
             .into_response();
     }
@@ -54,23 +62,49 @@ pub async fn submit_handler(
     match state.broadcaster.send(payload.text) {
         Ok(subscriber_count) => {
             info!(subscriber_count, "queued print message from form");
-            Html(render_form(Some("print job submitted"))).into_response()
+            Html(render_form(
+                Some("print job submitted"),
+                Some(MessageKind::Success),
+                true,
+            ))
+            .into_response()
         }
         Err(err) => {
             warn!(error = %err, "failed to queue print message from form");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Html(render_form(Some("no printer clients connected"))),
+                Html(render_form(
+                    Some("no printer clients connected"),
+                    Some(MessageKind::Error),
+                    false,
+                )),
             )
                 .into_response()
         }
     }
 }
 
-fn render_form(message: Option<&str>) -> String {
+fn render_form(
+    message: Option<&str>,
+    message_kind: Option<MessageKind>,
+    submitted: bool,
+) -> String {
+    let message_class = match message_kind {
+        Some(MessageKind::Success) => "message message-success",
+        Some(MessageKind::Error) => "message message-error",
+        None => "message",
+    };
+
     let message_html = message
-        .map(|message| format!("<p class=\"message\">{message}</p>"))
+        .map(|message| format!("<p class=\"{message_class}\">{message}</p>"))
         .unwrap_or_default();
+
+    let textarea_attrs = if submitted {
+        " maxlength=\"244\" required disabled"
+    } else {
+        " maxlength=\"244\" required"
+    };
+    let button_attrs = if submitted { " disabled" } else { "" };
 
     format!(
         r#"<!DOCTYPE html>
@@ -139,6 +173,15 @@ fn render_form(message: Option<&str>) -> String {
       margin: 0;
     }}
 
+    .message-success {{
+      color: #22c55e;
+      font-weight: 700;
+    }}
+
+    .message-error {{
+      color: #f59e0b;
+    }}
+
     button {{
       align-self: flex-start;
       border: 1px solid #fff;
@@ -163,10 +206,10 @@ fn render_form(message: Option<&str>) -> String {
   <main>
     <form method="post" action="/form" id="print-form">
       <label for="text">message</label>
-      <textarea id="text" name="text" maxlength="244" required></textarea>
+      <textarea id="text" name="text"{textarea_attrs}></textarea>
       <p class="hint"><span id="chars-left">244</span> characters left</p>
       {message_html}
-      <button type="submit" id="submit-button">send</button>
+      <button type="submit" id="submit-button"{button_attrs}>send</button>
     </form>
     <script>
       const maxChars = 244;
@@ -174,13 +217,20 @@ fn render_form(message: Option<&str>) -> String {
       const charsLeft = document.getElementById("chars-left");
       const submitButton = document.getElementById("submit-button");
 
+      let isSubmitting = false;
+      const submitted = textarea.disabled;
+
       const updateFormState = () => {{
         const remaining = maxChars - Array.from(textarea.value).length;
         charsLeft.textContent = String(remaining);
-        submitButton.disabled = remaining < 0;
+        submitButton.disabled = submitted || isSubmitting || remaining < 0;
       }};
 
       textarea.addEventListener("input", updateFormState);
+      document.getElementById("print-form").addEventListener("submit", () => {{
+        isSubmitting = true;
+        submitButton.disabled = true;
+      }});
       updateFormState();
     </script>
   </main>
