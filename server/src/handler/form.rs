@@ -8,7 +8,7 @@ use chrono::Local;
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use crate::{is_authorized, unauthorized_response, AppState};
+use crate::{enqueue_or_broadcast, is_authorized, unauthorized_response, AppState};
 
 const MAX_FORM_CHARS: usize = 244;
 
@@ -63,9 +63,9 @@ pub async fn submit_handler(
     let formatted_text = format_print_job(&payload.text);
     info!("received print job from form:\n {formatted_text}");
 
-    match state.broadcaster.send(formatted_text) {
+    match enqueue_or_broadcast(&state, formatted_text).await {
         Ok(subscriber_count) => {
-            info!(subscriber_count, "queued print message from form");
+            info!(subscriber_count, "accepted print message from form");
             Html(render_form(
                 Some("print job submitted"),
                 Some(MessageKind::Success),
@@ -78,7 +78,7 @@ pub async fn submit_handler(
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Html(render_form(
-                    Some("no printer clients connected"),
+                    Some("failed to queue print job"),
                     Some(MessageKind::Error),
                     false,
                 )),

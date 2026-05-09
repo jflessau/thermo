@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use crate::{is_authorized, unauthorized_response, AppState};
+use crate::{enqueue_or_broadcast, is_authorized, unauthorized_response, AppState};
 
 const MAX_PRINT_JOB_CHARS: usize = 2_500;
 
@@ -37,18 +37,14 @@ pub async fn handler(
         return unauthorized_response();
     }
 
-    match state.broadcaster.send(payload.text) {
+    match enqueue_or_broadcast(&state, payload.text).await {
         Ok(subscriber_count) => {
-            info!(subscriber_count, "queued print message");
+            info!(subscriber_count, "accepted print message");
             StatusCode::ACCEPTED.into_response()
         }
         Err(err) => {
             warn!(error = %err, "failed to queue print message");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "no printer clients connected",
-            )
-                .into_response()
+            (StatusCode::SERVICE_UNAVAILABLE, "failed to queue print job").into_response()
         }
     }
 }

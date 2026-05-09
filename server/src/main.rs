@@ -1,6 +1,6 @@
 mod handler;
 
-use std::{env, net::SocketAddr, sync::OnceLock};
+use std::{collections::VecDeque, env, net::SocketAddr, sync::OnceLock};
 
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
@@ -13,7 +13,7 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
 
 static BASIC_AUTH_USER: OnceLock<String> = OnceLock::new();
@@ -22,6 +22,8 @@ static BASIC_AUTH_PASSWORD: OnceLock<String> = OnceLock::new();
 #[derive(Clone)]
 pub struct AppState {
     pub broadcaster: broadcast::Sender<String>,
+    pub pending_jobs: std::sync::Arc<Mutex<VecDeque<String>>>,
+    pub connected_printers: std::sync::Arc<Mutex<usize>>,
     pub basic_auth_user: String,
     pub basic_auth_password: String,
 }
@@ -56,6 +58,8 @@ async fn serve() -> Result<()> {
         .context("BIND_ADDR must be a valid socket address")?;
 
     let (broadcaster, _) = broadcast::channel(256);
+    let pending_jobs = std::sync::Arc::new(Mutex::new(VecDeque::new()));
+    let connected_printers = std::sync::Arc::new(Mutex::new(0));
 
     let app = Router::new()
         .route(
@@ -66,6 +70,8 @@ async fn serve() -> Result<()> {
         .route("/print/ws", get(handler::print_ws::handler))
         .with_state(AppState {
             broadcaster,
+            pending_jobs,
+            connected_printers,
             basic_auth_user,
             basic_auth_password,
         });
@@ -143,6 +149,26 @@ pub fn unauthorized_response() -> Response {
         "unauthorized",
     )
         .into_response()
+}
+
+pub async fn enqueue_or_broadcast(state: &AppState, text: String) -> Result<usize> {
+    let connected_printers = *state.connected_printers.lock().await;
+
+    if connected_printers == 0 {
+        let mut pending_jobs = state.pending_jobs.lock().await;
+        pending_jobs.push_back(text);
+        let pending_count = pending_jobs.len();
+        info!(
+            pending_count,
+            "queued print job in memory until a printer connects"
+        );
+        return Ok(0);
+    }
+
+    state
+        .broadcaster
+        .send(text)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))
 }
 
 pub fn is_authorized(headers: &HeaderMap, expected_user: &str, expected_password: &str) -> bool {
