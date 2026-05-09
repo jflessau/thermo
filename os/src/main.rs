@@ -3,14 +3,20 @@ mod printer;
 use std::{
     env,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use printer::Printer;
-use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message, client::IntoClientRequest},
+};
 use tracing::{debug, error, info, warn};
 use url::Url;
+
+const CLIENT_PING_INTERVAL: Duration = Duration::from_secs(3);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -63,7 +69,7 @@ async fn run_printer_client(
             }
         }
 
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 }
 
@@ -86,28 +92,43 @@ async fn connect_and_consume(
 
     info!(status = %response.status(), "connected to printer relay websocket");
 
-    let (_, mut read) = ws_stream.split();
+    let (mut write, mut read) = ws_stream.split();
+    let mut ping_interval = tokio::time::interval(CLIENT_PING_INTERVAL);
 
-    while let Some(message) = read.next().await {
-        match message.context("failed to read websocket message")? {
-            tokio_tungstenite::tungstenite::Message::Text(text) => {
-                info!(len = text.len(), "received print job");
-                print_text(printer, &text)?;
+    loop {
+        tokio::select! {
+            _ = ping_interval.tick() => {
+                if let Err(err) = write.send(Message::Ping(Vec::new().into())).await {
+                    return Err(err).context("failed to send websocket ping to server");
+                }
             }
-            tokio_tungstenite::tungstenite::Message::Binary(_) => {
-                warn!("ignoring unexpected binary websocket message");
-            }
-            tokio_tungstenite::tungstenite::Message::Ping(_) => {}
-            tokio_tungstenite::tungstenite::Message::Pong(_) => {}
-            tokio_tungstenite::tungstenite::Message::Frame(_) => {}
-            tokio_tungstenite::tungstenite::Message::Close(frame) => {
-                info!(?frame, "printer websocket closed by server");
-                return Ok(());
+            message = read.next() => {
+                match message {
+                    Some(message) => match message.context("failed to read websocket message")? {
+                        Message::Text(text) => {
+                            info!(len = text.len(), "received print job");
+                            print_text(printer, &text)?;
+                        }
+                        Message::Binary(_) => {
+                            warn!("ignoring unexpected binary websocket message");
+                        }
+                        Message::Ping(payload) => {
+                            if let Err(err) = write.send(Message::Pong(payload)).await {
+                                return Err(err).context("failed to respond to websocket ping from server");
+                            }
+                        }
+                        Message::Pong(_) => {}
+                        Message::Frame(_) => {}
+                        Message::Close(frame) => {
+                            info!(?frame, "printer websocket closed by server");
+                            return Ok(());
+                        }
+                    },
+                    None => return Ok(()),
+                }
             }
         }
     }
-
-    Ok(())
 }
 
 fn print_text(printer: &Arc<Mutex<Printer>>, text: &str) -> Result<()> {

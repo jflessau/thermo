@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use axum::{
     extract::{
         ws::{Message, WebSocket},
@@ -10,6 +12,8 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::{is_authorized, unauthorized_response, AppState};
+
+const MAX_CLIENT_PING_AGE: Duration = Duration::from_secs(10);
 
 pub async fn handler(
     ws: WebSocketUpgrade,
@@ -29,17 +33,16 @@ pub async fn handler(
 
 async fn handle_ws_connection(mut socket: WebSocket, state: AppState) {
     let mut rx = state.broadcaster.subscribe();
-    let is_first_connection = {
+    {
         let mut connected_printers = state.connected_printers.lock().await;
         *connected_printers += 1;
-        *connected_printers == 1
-    };
+    }
 
     info!("printer websocket connected");
+    flush_pending_jobs(&state).await;
 
-    if is_first_connection {
-        flush_pending_jobs(&state).await;
-    }
+    let mut last_client_ping_at = Instant::now();
+    let mut liveness_interval = tokio::time::interval(Duration::from_secs(1));
 
     loop {
         tokio::select! {
@@ -60,10 +63,18 @@ async fn handle_ws_connection(mut socket: WebSocket, state: AppState) {
                     }
                 }
             }
+            _ = liveness_interval.tick() => {
+                let elapsed = last_client_ping_at.elapsed();
+                if elapsed > MAX_CLIENT_PING_AGE {
+                    warn!(elapsed_secs = elapsed.as_secs_f32(), "printer websocket timed out waiting for client ping");
+                    break;
+                }
+            }
             message = socket.recv() => {
                 match message {
                     Some(Ok(Message::Close(_))) => break,
                     Some(Ok(Message::Ping(payload))) => {
+                        last_client_ping_at = Instant::now();
                         if let Err(err) = socket.send(Message::Pong(payload)).await {
                             warn!(error = %err, "failed to respond to websocket ping");
                             break;
@@ -100,7 +111,7 @@ async fn flush_pending_jobs(state: &AppState) {
 
     info!(
         count = pending_jobs.len(),
-        "flushing queued print jobs to newly connected printer"
+        "flushing queued print jobs to connected printer"
     );
 
     while let Some(job) = pending_jobs.pop_front() {
