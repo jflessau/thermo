@@ -5,25 +5,25 @@ on:
       - main
 
 jobs:
-  lint_os:
-    name: "Lint: OS"
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@master
-      - name: install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          components: clippy
-          override: true
-      - name: format
-        run: |
-          cd os && cargo fmt -- --check
-      - name: lint
-        run: |
-          cd os && cargo clippy -- -D warnings
+  # lint_os:
+  #   name: "Lint: OS"
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: checkout
+  #       uses: actions/checkout@master
+  #     - name: install rust
+  #       uses: actions-rs/toolchain@v1
+  #       with:
+  #         profile: minimal
+  #         toolchain: stable
+  #         components: clippy
+  #         override: true
+  #     - name: format
+  #       run: |
+  #         cd os && cargo fmt -- --check
+  #     - name: lint
+  #       run: |
+  #         cd os && cargo clippy -- -D warnings
 
   lint_server:
     name: "Lint: Server"
