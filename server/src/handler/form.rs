@@ -200,9 +200,16 @@ fn render_form(
 
     .hint,
     .message {{
-      color: #fff;
       font-size: 14px;
       margin: 0;
+    }}
+
+    .hint {{
+      color: #fff;
+    }}
+
+    .disclaimer {{
+      color: #9ca3af;
     }}
 
     .message-success {{
@@ -239,6 +246,7 @@ fn render_form(
     <form method="post" action="/form" id="print-form">
       <label for="text">message</label>
       <textarea id="text" name="text"{textarea_attrs}></textarea>
+      <p class="hint disclaimer">I may upload photos of the printed text to my blog, so please consider everything you send here public.</p>
       <p class="hint"><span id="chars-left">244</span> characters left</p>
       {message_html}
       <button type="submit" id="submit-button"{button_attrs}>send</button>
