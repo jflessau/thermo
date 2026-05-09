@@ -16,8 +16,7 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-const CLIENT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
-const CLIENT_HEARTBEAT_MESSAGE: &str = "__thermo_heartbeat__";
+const CLIENT_PING_INTERVAL: Duration = Duration::from_secs(3);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -94,14 +93,15 @@ async fn connect_and_consume(
     info!(status = %response.status(), "connected to printer relay websocket");
 
     let (mut write, mut read) = ws_stream.split();
-    let mut heartbeat_interval = tokio::time::interval(CLIENT_HEARTBEAT_INTERVAL);
+    let mut ping_interval = tokio::time::interval(CLIENT_PING_INTERVAL);
 
     loop {
         tokio::select! {
-            _ = heartbeat_interval.tick() => {
-                if let Err(err) = write.send(Message::Text(CLIENT_HEARTBEAT_MESSAGE.into())).await {
-                    return Err(err).context("failed to send websocket heartbeat to server");
+            _ = ping_interval.tick() => {
+                if let Err(err) = write.send(Message::Ping(Vec::new())).await {
+                    return Err(err).context("failed to send websocket ping to server");
                 }
+                debug!("sent websocket ping to server");
             }
             message = read.next() => {
                 match message {
@@ -114,6 +114,7 @@ async fn connect_and_consume(
                             warn!("ignoring unexpected binary websocket message");
                         }
                         Message::Ping(payload) => {
+                            debug!("received websocket ping from server, responding with pong");
                             if let Err(err) = write.send(Message::Pong(payload)).await {
                                 return Err(err).context("failed to respond to websocket ping from server");
                             }

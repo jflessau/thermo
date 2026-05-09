@@ -1,26 +1,29 @@
-
 FROM rust:latest AS builder
 
 WORKDIR /usr/src/server
 
 # install system dependencies
-
 RUN apt update
 RUN apt install -y musl-tools
 
-# build
-
+# prepare toolchain
 RUN rustup target add x86_64-unknown-linux-musl
 # RUN rustup target add aarch64-unknown-linux-musl
-COPY src ./src
+
+# cache dependencies
 COPY Cargo.toml .
 COPY Cargo.lock .
+RUN mkdir src && \
+    echo 'fn main() {}' > src/main.rs && \
+    cargo build --release --target x86_64-unknown-linux-musl && \
+    rm -rf src
 
+# build application
+COPY src ./src
 RUN cargo install --target x86_64-unknown-linux-musl --path .
 # RUN cargo install --target aarch64-unknown-linux-musl --path .
 
 # use multi-stage build to reduce image size
-
 FROM alpine:latest
 COPY --from=builder /usr/local/cargo/bin/server .
 ENTRYPOINT ["./server"]
