@@ -13,7 +13,8 @@ use tracing::{info, warn};
 
 use crate::{is_authorized, unauthorized_response, AppState};
 
-const MAX_CLIENT_PING_AGE: Duration = Duration::from_secs(10);
+const MAX_CLIENT_HEARTBEAT_AGE: Duration = Duration::from_secs(10);
+const CLIENT_HEARTBEAT_MESSAGE: &str = "__thermo_heartbeat__";
 
 pub async fn handler(
     ws: WebSocketUpgrade,
@@ -41,7 +42,7 @@ async fn handle_ws_connection(mut socket: WebSocket, state: AppState) {
     info!("printer websocket connected");
     flush_pending_jobs(&state).await;
 
-    let mut last_client_ping_at = Instant::now();
+    let mut last_client_heartbeat_at = Instant::now();
     let mut liveness_interval = tokio::time::interval(Duration::from_secs(1));
 
     loop {
@@ -64,9 +65,9 @@ async fn handle_ws_connection(mut socket: WebSocket, state: AppState) {
                 }
             }
             _ = liveness_interval.tick() => {
-                let elapsed = last_client_ping_at.elapsed();
-                if elapsed > MAX_CLIENT_PING_AGE {
-                    warn!(elapsed_secs = elapsed.as_secs_f32(), "printer websocket timed out waiting for client ping");
+                let elapsed = last_client_heartbeat_at.elapsed();
+                if elapsed > MAX_CLIENT_HEARTBEAT_AGE {
+                    warn!(elapsed_secs = elapsed.as_secs_f32(), "printer websocket timed out waiting for client heartbeat");
                     break;
                 }
             }
@@ -74,14 +75,18 @@ async fn handle_ws_connection(mut socket: WebSocket, state: AppState) {
                 match message {
                     Some(Ok(Message::Close(_))) => break,
                     Some(Ok(Message::Ping(payload))) => {
-                        last_client_ping_at = Instant::now();
                         if let Err(err) = socket.send(Message::Pong(payload)).await {
                             warn!(error = %err, "failed to respond to websocket ping");
                             break;
                         }
                     }
                     Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Text(_))) | Some(Ok(Message::Binary(_))) => {
+                    Some(Ok(Message::Text(text))) => {
+                        if text == CLIENT_HEARTBEAT_MESSAGE {
+                            last_client_heartbeat_at = Instant::now();
+                        }
+                    }
+                    Some(Ok(Message::Binary(_))) => {
                         // ignore messages from printer clients
                     }
                     Some(Err(err)) => {

@@ -16,7 +16,8 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-const CLIENT_PING_INTERVAL: Duration = Duration::from_secs(3);
+const CLIENT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+const CLIENT_HEARTBEAT_MESSAGE: &str = "__thermo_heartbeat__";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -93,13 +94,13 @@ async fn connect_and_consume(
     info!(status = %response.status(), "connected to printer relay websocket");
 
     let (mut write, mut read) = ws_stream.split();
-    let mut ping_interval = tokio::time::interval(CLIENT_PING_INTERVAL);
+    let mut heartbeat_interval = tokio::time::interval(CLIENT_HEARTBEAT_INTERVAL);
 
     loop {
         tokio::select! {
-            _ = ping_interval.tick() => {
-                if let Err(err) = write.send(Message::Ping(Vec::new().into())).await {
-                    return Err(err).context("failed to send websocket ping to server");
+            _ = heartbeat_interval.tick() => {
+                if let Err(err) = write.send(Message::Text(CLIENT_HEARTBEAT_MESSAGE.into())).await {
+                    return Err(err).context("failed to send websocket heartbeat to server");
                 }
             }
             message = read.next() => {
