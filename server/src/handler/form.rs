@@ -48,7 +48,7 @@ pub async fn submit_handler(
         return unauthorized_response();
     }
 
-    if payload.text.chars().count() > MAX_FORM_CHARS {
+    if payload.text.chars().collect::<Vec<_>>().len() > MAX_FORM_CHARS {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
             Html(render_form(
@@ -132,9 +132,9 @@ fn render_form(
         .unwrap_or_default();
 
     let textarea_attrs = if submitted {
-        " maxlength=\"244\" required disabled"
+        " required disabled"
     } else {
-        " maxlength=\"244\" required"
+        " required"
     };
     let button_attrs = if submitted { " disabled" } else { "" };
 
